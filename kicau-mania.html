@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Kicau Mania Detector</title>
+
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+
+<!-- MediaPipe CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+body {
+  margin:0;
+  background:#000;
+  color:#00ff41;
+  font-family:'Share Tech Mono', monospace;
+  overflow:hidden;
+}
+
+/* Video hidden tapi tetap render */
+video {
+  position:absolute;
+  opacity:0;
+  pointer-events:none;
+}
+
+/* Canvas */
+canvas {
+  position:absolute;
+  top:0;
+  left:0;
+}
+
+/* Header */
+header {
+  position:fixed;
+  top:10px;
+  left:20px;
+  font-family:'Orbitron';
+}
+
+.status span {
+  margin-right:10px;
+}
+
+/* Footer */
+footer {
+  position:fixed;
+  bottom:10px;
+  left:20px;
+}
+
+/* Glitch Banner */
+#banner {
+  position:fixed;
+  top:40%;
+  width:100%;
+  text-align:center;
+  font-size:48px;
+  color:#00e5ff;
+  display:none;
+}
+
+/* Cats */
+.cat-gif {
+  position:fixed;
+  width:60px;
+  height:60px;
+  display:none;
+}
+
+.active {
+  display:block !important;
+  animation:bounce 1s infinite;
+}
+
+@keyframes bounce {
+  0%,100% { transform:translateY(0); }
+  50% { transform:translateY(-20px); }
+}
+
+/* Positions */
+.cat-1 { top:0; left:0; }
+.cat-2 { top:0; right:0; }
+.cat-3 { bottom:0; left:0; }
+.cat-4 { bottom:0; right:0; }
+.cat-5 { top:50%; left:0; }
+.cat-6 { top:50%; right:0; }
+
+/* Loading */
+#loading {
+  position:fixed;
+  width:100%;
+  height:100%;
+  background:#000;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
+}
+
+#progress {
+  width:200px;
+  height:10px;
+  background:#222;
+}
+
+#bar {
+  height:100%;
+  width:0%;
+  background:#00ff41;
+}
+</style>
+</head>
+
+<body>
+
+<div id="loading">
+  <h2>Initializing...</h2>
+  <div id="progress"><div id="bar"></div></div>
+</div>
+
+<header>
+  <div class="status">
+    <span id="cam">CAM: OFF</span>
+    <span id="hand">HAND: OFF</span>
+    <span id="face">FACE: OFF</span>
+    <span id="kicau">KICAU: OFF</span>
+  </div>
+</header>
+
+<footer>
+  FPS: <span id="fps">0</span> |
+  Distance: <span id="dist">0</span>
+</footer>
+
+<div id="banner">KICAU MANIA!</div>
+
+<video id="video" autoplay muted playsinline></video>
+<canvas id="canvas"></canvas>
+
+<audio id="kicauAudio" src="kicau-mania.mp3" loop></audio>
+
+<img src="cat1.gif" class="cat-gif cat-1">
+<img src="cat2.gif" class="cat-gif cat-2">
+<img src="cat3.gif" class="cat-gif cat-3">
+<img src="cat4.gif" class="cat-gif cat-4">
+<img src="cat5.gif" class="cat-gif cat-5">
+<img src="cat6.gif" class="cat-gif cat-6">
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const audio = document.getElementById('kicauAudio');
+let isPlaying = false;
+
+let faceLandmarks = null;
+let handLandmarks = null;
+
+const threshold = 0.12;
+
+const hands = new Hands({
+  locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands:1,
+  minDetectionConfidence:0.7,
+  minTrackingConfidence:0.7
+});
+
+hands.onResults(res => {
+  if (res.multiHandLandmarks.length > 0) {
+    handLandmarks = res.multiHandLandmarks[0];
+    document.getElementById("hand").innerText = "HAND: ON";
+  }
+});
+
+const face = new FaceMesh({
+  locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+});
+
+face.setOptions({
+  maxNumFaces:1,
+  minDetectionConfidence:0.7
+});
+
+face.onResults(res => {
+  if (res.multiFaceLandmarks.length > 0) {
+    faceLandmarks = res.multiFaceLandmarks[0];
+    document.getElementById("face").innerText = "FACE: ON";
+  }
+});
+
+navigator.mediaDevices.getUserMedia({ video:true }).then(stream => {
+  video.srcObject = stream;
+  document.getElementById("cam").innerText = "CAM: ON";
+
+  const camera = new Camera(video, {
+    onFrame: async () => {
+      await hands.send({ image: video });
+      await face.send({ image: video });
+      draw();
+    },
+    width:640,
+    height:480
+  });
+
+  camera.start();
+});
+
+function distance(a,b){
+  return Math.sqrt(
+    (a.x-b.x)**2 +
+    (a.y-b.y)**2 +
+    (a.z-b.z)**2
+  );
+}
+
+function draw(){
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  if(handLandmarks && faceLandmarks){
+    const handPoint = handLandmarks[9]; // punggung tangan approx
+    const mouthPoint = faceLandmarks[13]; // bibir atas
+
+    const dist = distance(handPoint, mouthPoint);
+    document.getElementById("dist").innerText = dist.toFixed(3);
+
+    if(dist < threshold){
+      activateKicau();
+    } else {
+      deactivateKicau();
+    }
+
+    // draw points
+    ctx.fillStyle = "#00e5ff";
+    ctx.beginPath();
+    ctx.arc(handPoint.x*canvas.width, handPoint.y*canvas.height, 5,0,2*Math.PI);
+    ctx.fill();
+
+    ctx.fillStyle = "#00ff41";
+    ctx.beginPath();
+    ctx.arc(mouthPoint.x*canvas.width, mouthPoint.y*canvas.height, 5,0,2*Math.PI);
+    ctx.fill();
+  }
+}
+
+function activateKicau(){
+  document.getElementById("kicau").innerText = "KICAU: ON";
+  document.getElementById("banner").style.display = "block";
+
+  document.querySelectorAll(".cat-gif").forEach(el=>el.classList.add("active"));
+
+  if(!isPlaying){
+    audio.play();
+    isPlaying = true;
+  }
+}
+
+function deactivateKicau(){
+  document.getElementById("kicau").innerText = "KICAU: OFF";
+  document.getElementById("banner").style.display = "none";
+
+  document.querySelectorAll(".cat-gif").forEach(el=>el.classList.remove("active"));
+
+  if(isPlaying){
+    audio.pause();
+    isPlaying = false;
+  }
+}
+
+// fake loading
+let progress = 0;
+let bar = document.getElementById("bar");
+let interval = setInterval(()=>{
+  progress += 10;
+  bar.style.width = progress+"%";
+  if(progress >= 100){
+    clearInterval(interval);
+    document.getElementById("loading").style.display = "none";
+  }
+},200);
+</script>
+
+</body>
+</html>
